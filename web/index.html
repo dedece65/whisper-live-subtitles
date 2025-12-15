@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper Live - Transcripción en Tiempo Real</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎙️ Whisper Live</h1>
+            <p class="subtitle">Transcripción automática en tiempo real</p>
+        </header>
+
+        <div class="controls-panel">
+            <div class="settings-grid">
+                <div class="setting-group">
+                    <label for="serverHost">Servidor:</label>
+                    <input type="text" id="serverHost" value="localhost" placeholder="localhost">
+                </div>
+                
+                <div class="setting-group">
+                    <label for="serverPort">Puerto:</label>
+                    <input type="number" id="serverPort" value="9090" placeholder="9090">
+                </div>
+                
+                <div class="setting-group">
+                    <label for="language">Idioma:</label>
+                    <select id="language">
+                        <option value="en">🇬🇧 Inglés</option>
+                        <option value="es">🇪🇸 Español</option>
+                        <option value="fr">🇫🇷 Francés</option>
+                        <option value="de">🇩🇪 Alemán</option>
+                        <option value="it">🇮🇹 Italiano</option>
+                        <option value="pt">🇵🇹 Portugués</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="model">Modelo:</label>
+                    <select id="model">
+                        <option value="tiny">Tiny (rápido)</option>
+                        <option value="base">Base</option>
+                        <option value="small" selected>Small (recomendado)</option>
+                        <option value="medium">Medium</option>
+                        <option value="large">Large</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button id="startBtn" class="btn btn-primary">
+                    <span class="btn-icon">▶</span>
+                    Iniciar Transcripción
+                </button>
+                <button id="stopBtn" class="btn btn-danger" disabled>
+                    <span class="btn-icon">⏹</span>
+                    Detener
+                </button>
+                <button id="clearBtn" class="btn btn-secondary">
+                    <span class="btn-icon">🗑️</span>
+                    Limpiar
+                </button>
+            </div>
+
+            <div class="status-bar">
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-dot"></span>
+                    <span id="statusText">Desconectado</span>
+                </div>
+                <div class="audio-level">
+                    <span>🎤 Nivel:</span>
+                    <div class="level-bar">
+                        <div class="level-fill" id="audioLevel"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="transcription-panel">
+            <div class="panel-header">
+                <h2>📝 Transcripción</h2>
+                <button id="downloadBtn" class="btn-icon-only" title="Descargar transcripción">
+                    ⬇️
+                </button>
+            </div>
+            
+            <div class="transcription-display" id="transcriptionDisplay">
+                <div class="empty-state">
+                    <div class="empty-icon">🎤</div>
+                    <p>Presiona "Iniciar Transcripción" y comienza a hablar</p>
+                    <p class="empty-hint">Los subtítulos aparecerán aquí en tiempo real</p>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>Powered by <strong>OpenAI Whisper</strong> • <a href="https://github.com/collabora/WhisperLive" target="_blank">WhisperLive</a></p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

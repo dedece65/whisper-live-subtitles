@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  whisper-server:
+    build: .
+    image: whisper-live-server
+    container_name: whisper-live-server
+    ports:
+      - "9090:9090"    # Puerto WebSocket para el cliente
+    environment:
+      - WHISPER_MODEL=small.en    # Modelo a cargar (tiny, base, small, medium, large)
+    restart: unless-stopped
+    
+    # Descomentar las siguientes líneas para usar GPU (requiere nvidia-docker)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

@@ -1,0 +1,4 @@
+whisper-live
+sounddevice
+numpy
+websockets
