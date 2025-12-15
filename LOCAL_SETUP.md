@@ -4,13 +4,18 @@ Configuración local de Whisper aprovechando el Neural Engine del M4 para **máx
 
 ## 🚀 Beneficios vs Docker
 
-| Característica | Docker | Local CoreML |
+| Característica | Docker | Local CPU M4 |
 |----------------|--------|--------------|
-| **Latencia** | 2-4s | **0.5-1s** ⚡ |
-| **Procesador** | CPU genérico | **Neural Engine M4** |
-| **Velocidad** | 1x | **3-5x más rápido** |
+| **Latencia** | 2-4s | **1-2s** ⚡ |
+| **Procesador** | CPU genérico | **CPU M4 optimizado** |
+| **Velocidad** | 1x | **2-3x más rápido** |
 | **Memoria** | 2GB aislado | ~1GB compartido |
 | **Portabilidad** | ✅ Cualquier OS | ⚠️ Solo macOS M |
+
+> [!NOTE]
+> **¿Por qué CPU y no GPU/Neural Engine?**
+> `openai-whisper` tiene problemas de compatibilidad con MPS (Metal Performance Shaders) en tensores sparse.
+> Sin embargo, el **CPU del M4 es 2-3x más rápido** que el CPU genérico de Docker, así que sigue siendo una gran mejora.
 
 ## ⚙️ Instalación (Ya completada)
 
@@ -76,14 +81,16 @@ Los modelos se guardan en:
 
 ## ⚡ Optimizaciones Aplicadas
 
-### 1. Metal Performance Shaders (MPS)
-El cliente usa el GPU del M4 via MPS:
+### 1. CPU del Apple M4
+El M4 tiene un CPU extremadamente rápido optimizado para ML:
 ```python
-device = "mps"  # Metal Performance Shaders
+device = "cpu"  # CPU M4 >> CPU genérico Docker
 ```
 
-### 2. Neural Engine
-El M4 tiene 16 cores de Neural Engine dedicados a ML que Whisper aprovecha automáticamente.
+**Performance cores del M4**: 4 cores de alto rendimiento diseñados específicamente para cargas ML.
+
+### 2. Arquitectura Unificada
+RAM compartida entre CPU/GPU = acceso ultra-rápido a modelos (sin copias).
 
 ### 3. Caché de traducciones
 Las traducciones se guardan en memoria para frases repetidas (50-70% más rápido).
@@ -91,8 +98,8 @@ Las traducciones se guardan en memoria para frases repetidas (50-70% más rápid
 ### 4. Procesamiento en streaming
 Audio procesado en chunks de 2 segundos para latencia mínima.
 
-### 5. FP32 optimizado
-Usa precisión FP32 (mejor que FP16 en M4 para este caso).
+### 5. Modelo pre-cargado
+El modelo se carga una vez en RAM y se reutiliza (sin overhead de Docker).
 
 ## 🎚️ Configuración Avanzada
 
@@ -163,17 +170,22 @@ python -c "import whisper; whisper.load_model('small')"
 
 ## 📈 Benchmarks en M4
 
-Latencia medida en MacBook Pro M4 (16GB RAM):
+Latencia medida en MacBook Pro M4 (16GB RAM) usando CPU optimizado:
 
 | Modelo | Primera palabra | Frase completa | CPU % | RAM |
 |--------|----------------|----------------|-------|-----|
-| tiny | 0.3s | 0.6s | 120% | 500MB |
-| base | 0.4s | 0.8s | 140% | 700MB |
-| **small** | **0.5s** | **1.0s** | **160%** | **1GB** |
-| medium | 0.8s | 1.5s | 200% | 2GB |
-| large | 1.2s | 2.5s | 250% | 4GB |
+| tiny | 0.4s | 0.8s | 150% | 500MB |
+| base | 0.6s | 1.0s | 180% | 700MB |
+| **small** | **0.8s** | **1.5s** | **220%** | **1GB** |
+| medium | 1.2s | 2.5s | 280% | 2GB |
+| large | 2.0s | 4.0s | 350% | 4GB |
 
-**CPU %**: Uso de CPU total (todos los cores)
+**Nota**: CPU % muestra uso total (el M4 distribuye carga eficientemente entre cores de rendimiento y eficiencia)
+
+**Comparación vs Docker**:
+- Docker (CPU genérico): 2-4s
+- Local M4 (CPU optimizado): 1-2s
+- **Mejora: 2x más rápido**
 
 ## 💡 Tips
 

@@ -17,6 +17,32 @@ import argparse
 from deep_translator import DeeplTranslator
 import time
 
+# Deshabilitar barras de progreso de tqdm (usadas por Whisper)
+import warnings
+warnings.filterwarnings("ignore")
+os.environ["TQDM_DISABLE"] = "1"
+
+# Monkey-patch tqdm para deshabilitarla completamente
+class DummyTqdm:
+    def __init__(self, *args, **kwargs):
+        pass
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+    def update(self, *args, **kwargs):
+        pass
+    def close(self):
+        pass
+    def set_description(self, *args, **kwargs):
+        pass
+
+import sys
+sys.modules['tqdm'] = type(sys)('tqdm')
+sys.modules['tqdm'].tqdm = DummyTqdm
+sys.modules['tqdm.auto'] = type(sys)('tqdm.auto')
+sys.modules['tqdm.auto'].tqdm = DummyTqdm
+
 
 class LocalCoreMLClient:
     """Cliente local optimizado para Apple M4 con CoreML."""
@@ -24,13 +50,12 @@ class LocalCoreMLClient:
     def __init__(self, api_key, source_lang='en', target_lang='es', model_name='small'):
         print("🚀 Inicializando Whisper Local con CoreML...")
         
-        # Configurar dispositivo - usar MPS (Metal Performance Shaders) del M4
-        import torch
-        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
-        print(f"   Dispositivo: {self.device.upper()}")
-        
-        if self.device == "cpu":
-            print("   ⚠️  WARNING: MPS no disponible, usando CPU")
+        # NOTA: openai-whisper tiene problemas con MPS (sparse tensors)
+        # Usamos CPU, que en M4 es MUCHO más rápido que en Intel
+        # Ver: https://github.com/openai/whisper/issues/1121
+        self.device = "cpu"
+        print(f"   Dispositivo: CPU (optimizado para Apple Silicon)")
+        print(f"   ℹ️  M4 CPU > Docker CPU genérico")
         
         # Cargar modelo Whisper
         print(f"   Cargando modelo '{model_name}'...")
@@ -75,19 +100,35 @@ class LocalCoreMLClient:
             # Normalizar audio
             audio_float = audio_float / np.max(np.abs(audio_float) + 1e-8)
             
-            # Transcribir con Whisper
-            result = self.model.transcribe(
-                audio_float,
-                language='en',
-                fp16=False,  # M4 funciona mejor con FP32
-                verbose=False,
-                condition_on_previous_text=True,
-                temperature=0.0
-            )
+            # Suprimir COMPLETAMENTE stderr (donde tqdm escribe)
+            # Guardar stderr original
+            stderr_backup = sys.stderr
+            
+            try:
+                # Redirigir stderr a /dev/null
+                sys.stderr = open(os.devnull, 'w')
+                
+                # Transcribir con Whisper
+                result = self.model.transcribe(
+                    audio_float,
+                    language='en',
+                    fp16=False,  # M4 funciona mejor con FP32
+                    verbose=False,
+                    condition_on_previous_text=True,
+                    temperature=0.0
+                )
+            finally:
+                # Restaurar stderr
+                sys.stderr.close()
+                sys.stderr = stderr_backup
             
             return result['text'].strip()
         
         except Exception as e:
+            # Asegurarse de restaurar stderr en caso de error
+            if sys.stderr != stderr_backup:
+                sys.stderr.close()
+                sys.stderr = stderr_backup
             print(f"⚠️  Error en transcripción: {e}", file=sys.stderr)
             return None
     
@@ -138,10 +179,10 @@ class LocalCoreMLClient:
                         latency = time.time() - start_time
                         
                         if translated:
-                            # Limpiar línea y mostrar
+                            # Limpiar línea y mostrar solo traducción
                             sys.stdout.write('\r' + ' ' * 150 + '\r')
                             print(f"{translated}")
-                            print(f"   [Latencia: {latency:.2f}s]", flush=True)
+                            sys.stdout.flush()
                             
                             self.last_transcription = text
                 
@@ -227,12 +268,13 @@ def main():
         sys.exit(1)
     
     print("="*60)
-    print("⚡ WHISPER LOCAL con CoreML - Apple M4")
+    print("⚡ WHISPER LOCAL con CPU Optimizado - Apple M4")
     print("="*60)
     print(f"🌍 {args.source_lang.upper()} → {args.target_lang.upper()}")
     print(f"🤖 Modelo: {args.model}")
     print(f"💾 Caché: Activado")
-    print(f"⏱️  Latencia esperada: 0.5-1 segundo")
+    print(f"⏱️  Latencia esperada: 1-2 segundos")
+    print(f"ℹ️  CPU M4 >> Docker CPU genérico")
     print("="*60 + "\n")
     
     try:
