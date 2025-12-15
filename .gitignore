@@ -1,0 +1,18 @@
+# Ignorar entorno virtual del cliente
+venv-client/
+
+# Ignorar archivos de configuración de IDE
+.vscode/
+.idea/
+
+# Ignorar archivos de salida
+*.srt
+output_recording.wav
+
+# Ignorar cache de Python
+__pycache__/
+*.pyc
+*.pyo
+
+# No ignorar la carpeta web
+!web/
