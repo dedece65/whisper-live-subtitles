@@ -16,6 +16,8 @@ import os
 import argparse
 from deep_translator import DeeplTranslator
 import time
+import json
+from urllib import request as urllib_request, error as urllib_error
 
 # Deshabilitar barras de progreso de tqdm (usadas por Whisper)
 import warnings
@@ -47,7 +49,7 @@ sys.modules['tqdm.auto'].tqdm = DummyTqdm
 class LocalCoreMLClient:
     """Cliente local optimizado para Apple M4 con CoreML."""
     
-    def __init__(self, api_key, source_lang='en', target_lang='es', model_name='small'):
+    def __init__(self, api_key, source_lang='en', target_lang='es', model_name='small', web_display=False):
         print("🚀 Inicializando Whisper Local con CoreML...")
         
         # NOTA: openai-whisper tiene problemas con MPS (sparse tensors)
@@ -82,6 +84,12 @@ class LocalCoreMLClient:
         # Caché de traducciones
         self.translation_cache = {}
         self.last_transcription = ""
+        
+        # Configuración web display
+        self.web_display = web_display
+        self.web_server_url = "http://localhost:5000/subtitle"
+        if web_display:
+            print(f"🌐 Web Display: Activado (→ {self.web_server_url})")
         
         print("✅ Inicialización completa\n")
     
@@ -149,6 +157,25 @@ class LocalCoreMLClient:
             print(f"⚠️  Error en traducción: {e}", file=sys.stderr)
             return text
     
+    def send_to_web(self, text):
+        """Enviar subtítulo al servidor web."""
+        if not self.web_display or not text:
+            return
+        
+        try:
+            data = json.dumps({'text': text}).encode('utf-8')
+            req = urllib_request.Request(
+                self.web_server_url,
+                data=data,
+                headers={'Content-Type': 'application/json'}
+            )
+            urllib_request.urlopen(req, timeout=1)
+        except (urllib_error.URLError, urllib_error.HTTPError) as e:
+            # Silencioso: no mostrar error si el servidor no está disponible
+            pass
+        except Exception as e:
+            pass
+    
     def processing_loop(self):
         """Loop principal de procesamiento."""
         audio_buffer = np.array([], dtype=np.float32)
@@ -179,6 +206,9 @@ class LocalCoreMLClient:
                         latency = time.time() - start_time
                         
                         if translated:
+                            # Enviar a web display si está habilitado
+                            self.send_to_web(translated)
+                            
                             # Limpiar línea y mostrar solo traducción
                             sys.stdout.write('\r' + ' ' * 150 + '\r')
                             print(f"{translated}")
@@ -257,6 +287,11 @@ def main():
         choices=['tiny', 'base', 'small', 'medium', 'large'],
         help='Modelo Whisper (default: small)'
     )
+    parser.add_argument(
+        '--web-display',
+        action='store_true',
+        help='Enviar traducciones a servidor web en localhost:5000'
+    )
     
     args = parser.parse_args()
     
@@ -275,6 +310,8 @@ def main():
     print(f"💾 Caché: Activado")
     print(f"⏱️  Latencia esperada: 1-2 segundos")
     print(f"ℹ️  CPU M4 >> Docker CPU genérico")
+    if args.web_display:
+        print(f"🌐 Web Display: http://localhost:5000")
     print("="*60 + "\n")
     
     try:
@@ -282,7 +319,8 @@ def main():
             api_key=api_key,
             source_lang=args.source_lang,
             target_lang=args.target_lang,
-            model_name=args.model
+            model_name=args.model,
+            web_display=args.web_display
         )
         
         client.start()

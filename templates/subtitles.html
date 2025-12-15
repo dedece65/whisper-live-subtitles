@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subtítulos en Tiempo Real</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Indicador de estado discreto */
+        .status-indicator {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.7);
+            z-index: 100;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Contenedor principal de subtítulos */
+        .subtitle-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            padding: 2rem;
+            padding-bottom: 4rem;
+        }
+
+        /* Historial de subtítulos (más antiguos) */
+        .subtitle-history {
+            margin-bottom: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+
+        .subtitle-old {
+            text-align: center;
+            font-size: 1.8rem;
+            line-height: 1.6;
+            padding: 0.8rem 2rem;
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(5px);
+            border-radius: 8px;
+            border-left: 2px solid rgba(255, 255, 255, 0.15);
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .subtitle-old:first-child {
+            opacity: 0.4;
+        }
+
+        .subtitle-old:last-child {
+            opacity: 0.6;
+        }
+
+        /* Subtítulo actual (más reciente) */
+        .subtitle-current {
+            text-align: center;
+            font-size: 3.5rem;
+            line-height: 1.5;
+            font-weight: 400;
+            padding: 1.5rem 3rem;
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            text-shadow: 2px 2px 6px rgba(0, 0, 0, 0.9);
+            animation: slideUp 0.5s ease-out;
+        }
+
+        .subtitle-current.new {
+            animation: slideUp 0.5s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        /* Placeholder cuando no hay subtítulos */
+        .placeholder {
+            text-align: center;
+            font-size: 2rem;
+            color: rgba(255, 255, 255, 0.3);
+            font-style: italic;
+            padding: 3rem;
+        }
+
+        /* Metainformación del subtítulo */
+        .subtitle-meta {
+            text-align: center;
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        /* Responsive para pantallas pequeñas */
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.2rem;
+            }
+            
+            .subtitle-current {
+                font-size: 2rem;
+                padding: 1rem 1.5rem;
+            }
+            
+            .subtitle-old {
+                font-size: 1.3rem;
+            }
+        }
+
+        /* Pantalla completa optimizada */
+        @media (min-width: 1920px) {
+            .subtitle-current {
+                font-size: 4.5rem;
+            }
+            
+            .subtitle-old {
+                font-size: 2.2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Indicador de estado discreto -->
+    <div class="status-indicator">
+        <div class="status-dot"></div>
+        <span id="connection-status">Conectando...</span>
+    </div>
+
+    <div class="subtitle-container">
+        <div class="subtitle-history" id="subtitle-history">
+            <!-- Subtítulos antiguos se mostrarán aquí -->
+        </div>
+        
+        <div id="current-subtitle">
+            <div class="placeholder">
+                Esperando subtítulos...
+            </div>
+        </div>
+        
+        <div class="subtitle-meta" id="subtitle-meta"></div>
+    </div>
+
+    <script>
+        // Conectar al servidor Socket.IO
+        const socket = io();
+        
+        let subtitleCount = 0;
+        let subtitles = [];
+        const MAX_HISTORY = 2; // Mostrar 2 subtítulos antiguos
+
+        // Conexión establecida
+        socket.on('connect', () => {
+            console.log('✅ Conectado al servidor');
+            document.getElementById('connection-status').textContent = 'Conectado';
+        });
+
+        // Desconexión
+        socket.on('disconnect', () => {
+            console.log('❌ Desconectado del servidor');
+            document.getElementById('connection-status').textContent = 'Desconectado';
+        });
+
+        // Recibir historial inicial
+        socket.on('history', (history) => {
+            console.log('📚 Historial recibido:', history);
+            subtitles = history;
+            subtitleCount = history.length;
+            updateDisplay();
+        });
+
+        // Recibir nuevo subtítulo
+        socket.on('new_subtitle', (data) => {
+            console.log('📝 Nuevo subtítulo:', data);
+            
+            // Agregar al array
+            subtitles.push(data);
+            if (subtitles.length > MAX_HISTORY + 1) {
+                subtitles.shift();
+            }
+            
+            subtitleCount++;
+            updateDisplay(true);
+        });
+
+        // Actualizar la visualización
+        function updateDisplay(isNew = false) {
+            const historyContainer = document.getElementById('subtitle-history');
+            const currentContainer = document.getElementById('current-subtitle');
+            const metaContainer = document.getElementById('subtitle-meta');
+
+            if (subtitles.length === 0) {
+                historyContainer.innerHTML = '';
+                currentContainer.innerHTML = '<div class="placeholder">Esperando subtítulos...</div>';
+                metaContainer.textContent = '';
+                return;
+            }
+
+            // Obtener subtítulos (todos menos el último)
+            const historySubtitles = subtitles.slice(0, -1).slice(-MAX_HISTORY);
+            const currentSubtitle = subtitles[subtitles.length - 1];
+
+            // Actualizar historial
+            historyContainer.innerHTML = historySubtitles
+                .map(sub => `<div class="subtitle-old">${sub.text}</div>`)
+                .join('');
+
+            // Actualizar subtítulo actual
+            const newClass = isNew ? ' new' : '';
+            currentContainer.innerHTML = `
+                <div class="subtitle-current${newClass}">
+                    ${currentSubtitle.text}
+                </div>
+            `;
+
+            // Actualizar metainformación
+            metaContainer.textContent = currentSubtitle.timestamp;
+
+            // Remover clase 'new' después de la animación
+            if (isNew) {
+                setTimeout(() => {
+                    const element = currentContainer.querySelector('.subtitle-current');
+                    if (element) {
+                        element.classList.remove('new');
+                    }
+                }, 500);
+            }
+        }
+
+        // Tecla F11 para pantalla completa
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'F11') {
+                e.preventDefault();
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen();
+                } else {
+                    document.exitFullscreen();
+                }
+            }
+        });
+
+        console.log('🎬 Interfaz de subtítulos iniciada');
+        console.log('💡 Presiona F11 para pantalla completa');
+    </script>
+</body>
+</html>
