@@ -1,5 +1,6 @@
 # Ignorar entorno virtual del cliente
 venv-client/
+venv-local/
 
 # Ignorar archivos de configuración de IDE
 .vscode/
