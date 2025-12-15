@@ -2,3 +2,4 @@ whisper-live
 sounddevice
 numpy
 websockets
+deep-translator

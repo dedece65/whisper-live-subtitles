@@ -4,7 +4,10 @@ let mediaStream = null;
 let websocket = null;
 let audioWorkletNode = null;
 let isRecording = false;
+let serverReady = false;
 let transcriptionHistory = [];
+let clientUid = null;
+let audioProcessor = null;
 
 // Elementos del DOM
 const startBtn = document.getElementById('startBtn');
@@ -26,17 +29,30 @@ stopBtn.addEventListener('click', stopTranscription);
 clearBtn.addEventListener('click', clearTranscription);
 downloadBtn.addEventListener('click', downloadTranscription);
 
+// Generar UUID
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
 // Función principal para iniciar transcripción
 async function startTranscription() {
     try {
         updateStatus('connecting', 'Conectando...');
+        serverReady = false;
+        clientUid = generateUUID();
         
-        // Solicitar acceso al micrófono
+        // Solicitar acceso al micrófono con configuración específica
         mediaStream = await navigator.mediaDevices.getUserMedia({ 
             audio: {
+                channelCount: 1,  // Mono explícitamente
                 echoCancellation: true,
                 noiseSuppression: true,
-                sampleRate: 16000
+                autoGainControl: true,
+                sampleRate: { ideal: 16000 }
             } 
         });
         
@@ -47,25 +63,31 @@ async function startTranscription() {
         // Conectar WebSocket
         const wsUrl = `ws://${serverHost.value}:${serverPort.value}`;
         websocket = new WebSocket(wsUrl);
+        websocket.binaryType = 'arraybuffer';
         
         websocket.onopen = () => {
             console.log('WebSocket conectado');
-            updateStatus('connected', 'Conectado - Escuchando...');
             isRecording = true;
             startBtn.disabled = true;
             stopBtn.disabled = false;
             
-            // Enviar configuración inicial
+            // Enviar configuración inicial (según protocolo whisper-live)
             const config = {
-                language: language.value,
-                model: model.value,
+                uid: clientUid,
+                language: language.value || null,
                 task: 'transcribe',
-                use_vad: true
+                model: model.value,
+                use_vad: false,  // DESACTIVADO: El VAD está filtrando todo
+                max_clients: 4,
+                max_connection_time: 600,
+                send_last_n_segments: 10,
+                no_speech_thresh: 0.3,  // Menos estricto (default 0.45)
+                clip_audio: false,
+                same_output_threshold: 5  // Reducido de 10 para respuestas más rápidas
             };
-            websocket.send(JSON.stringify(config));
             
-            // Procesar audio
-            processAudio(source);
+            console.log('Enviando configuración:', config);
+            websocket.send(JSON.stringify(config));
         };
         
         websocket.onmessage = (event) => {
@@ -73,25 +95,45 @@ async function startTranscription() {
                 const data = JSON.parse(event.data);
                 console.log('Mensaje recibido:', data);
                 
-                if (data.text || data.segments) {
-                    const text = data.text || (data.segments && data.segments.map(s => s.text).join(' '));
-                    if (text && text.trim()) {
-                        addTranscription(text, data.is_final || false);
-                    }
+                // Validar UID
+                if (data.uid && data.uid !== clientUid) {
+                    console.error('UID inválido');
+                    return;
+                }
+                
+                // Manejar diferentes tipos de mensajes
+                if (data.message === 'SERVER_READY') {
+                    serverReady = true;
+                    updateStatus('connected', 'Conectado - Escuchando...');
+                    console.log('Servidor listo, iniciando captura de audio');
+                    processAudio(source);
+                } else if (data.message === 'DISCONNECT') {
+                    console.log('Servidor desconectó por tiempo excedido');
+                    stopTranscription();
+                } else if (data.status) {
+                    handleStatusMessage(data);
+                } else if (data.segments) {
+                    processSegments(data.segments);
+                } else if (data.language) {
+                    console.log(`Idioma detectado: ${data.language} (${data.language_prob})`);
                 }
             } catch (e) {
-                console.error('Error procesando mensaje:', e);
+                console.error('Error procesando mensaje:', e, event.data);
             }
         };
         
         websocket.onerror = (error) => {
             console.error('WebSocket error:', error);
             updateStatus('error', 'Error de conexión');
-            stopTranscription();
         };
         
-        websocket.onclose = () => {
-            console.log('WebSocket cerrado');
+        websocket.onclose = (event) => {
+            console.log('WebSocket cerrado', {
+                code: event.code,
+                reason: event.reason,
+                wasClean: event.wasClean
+            });
+            
             if (isRecording) {
                 updateStatus('disconnected', 'Desconectado');
                 stopTranscription();
@@ -105,36 +147,81 @@ async function startTranscription() {
     }
 }
 
+// Manejar mensajes de estado del servidor
+function handleStatusMessage(data) {
+    if (data.status === 'WAIT') {
+        updateStatus('waiting', `En espera - ${Math.round(data.message)} min`);
+        console.log(`Servidor lleno. Tiempo de espera: ${data.message} minutos`);
+    } else if (data.status === 'ERROR') {
+        updateStatus('error', `Error: ${data.message}`);
+        console.error(`Error del servidor: ${data.message}`);
+    } else if (data.status === 'WARNING') {
+        console.warn(`Advertencia del servidor: ${data.message}`);
+    }
+}
+
+// Procesar segmentos de transcripción
+function processSegments(segments) {
+    if (!segments || segments.length === 0) return;
+    
+    for (const segment of segments) {
+        const text = segment.text;
+        const isFinal = segment.completed || false;
+        
+        if (text && text.trim()) {
+            addTranscription(text, isFinal);
+        }
+    }
+}
+
 // Procesar audio y enviarlo al servidor
 function processAudio(source) {
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
     
-    source.connect(processor);
-    processor.connect(audioContext.destination);
+    source.connect(audioProcessor);
+    audioProcessor.connect(audioContext.destination);
     
-    processor.onaudioprocess = (e) => {
-        if (!isRecording || !websocket || websocket.readyState !== WebSocket.OPEN) {
+    console.log(`Audio Context: ${audioContext.sampleRate}Hz`);
+    
+    audioProcessor.onaudioprocess = (e) => {
+        if (!isRecording || !websocket || websocket.readyState !== WebSocket.OPEN || !serverReady) {
             return;
         }
         
+        // Obtener datos de audio (ya es mono porque pedimos 1 canal)
         const inputData = e.inputBuffer.getChannelData(0);
         
         // Calcular nivel de audio para visualización
-        const sum = inputData.reduce((acc, val) => acc + Math.abs(val), 0);
+        let sum = 0;
+        for (let i = 0; i < inputData.length; i++) {
+            // Asegurarse de que no hay NaN o Infinity
+            if (isFinite(inputData[i])) {
+                sum += Math.abs(inputData[i]);
+            }
+        }
         const average = sum / inputData.length;
         const level = Math.min(100, average * 1000);
         audioLevel.style.width = `${level}%`;
         
-        // Convertir a Int16Array para enviar al servidor
+        // Convertir Float32 a Int16 correctamente, validando datos
         const int16Data = new Int16Array(inputData.length);
         for (let i = 0; i < inputData.length; i++) {
-            const s = Math.max(-1, Math.min(1, inputData[i]));
+            // Validar y clampar valores
+            let s = inputData[i];
+            if (!isFinite(s)) {
+                s = 0; // Reemplazar NaN/Infinity con 0
+            } else {
+                s = Math.max(-1, Math.min(1, s));
+            }
+            // Convertir a Int16 con rango completo
             int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
         
-        // Enviar audio como array buffer
-        if (websocket && websocket.readyState === WebSocket.OPEN) {
+        // Enviar audio como array buffer (binario)
+        try {
             websocket.send(int16Data.buffer);
+        } catch (e) {
+            console.error('Error enviando audio:', e);
         }
     };
 }
@@ -142,6 +229,12 @@ function processAudio(source) {
 // Detener transcripción
 function stopTranscription() {
     isRecording = false;
+    serverReady = false;
+    
+    if (audioProcessor) {
+        audioProcessor.disconnect();
+        audioProcessor = null;
+    }
     
     if (websocket) {
         websocket.close();

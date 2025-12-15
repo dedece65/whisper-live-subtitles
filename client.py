@@ -46,6 +46,24 @@ def main():
         choices=['transcribe', 'translate'],
         help='Tarea: transcribe o translate (traducir a inglés) (default: transcribe)'
     )
+    parser.add_argument(
+        '--send-last-n',
+        type=int,
+        default=5,
+        help='Número de segmentos recientes a enviar (menos = más rápido, default: 5)'
+    )
+    parser.add_argument(
+        '--no-speech-thresh',
+        type=float,
+        default=0.3,
+        help='Umbral de no-voz (menor = detecta voz más fácilmente, default: 0.3)'
+    )
+    parser.add_argument(
+        '--same-output-thresh',
+        type=int,
+        default=3,
+        help='Repeticiones antes de considerarlo segmento válido (menor = más rápido, default: 3)'
+    )
     
     args = parser.parse_args()
     
@@ -54,19 +72,24 @@ def main():
     print(f"🌍 Idioma: {args.lang}")
     print(f"🤖 Modelo: {args.model}")
     print(f"⚙️  Tarea: {args.task}")
+    print(f"⚡ Segmentos: {args.send_last_n} (menos = respuesta más rápida)")
+    print(f"🎚️  Umbral no-voz: {args.no_speech_thresh}")
     print("\n" + "="*60)
     print("Habla al micrófono para ver los subtítulos en tiempo real")
     print("Presiona Ctrl+C para detener")
     print("="*60 + "\n")
     
     try:
-        # Crear cliente de transcripción
+        # Crear cliente de transcripción con opciones optimizadas
         client = TranscriptionClient(
             host=args.host,
             port=args.port,
             lang=args.lang,
             model=args.model,
-            translate=(args.task == 'translate')
+            translate=(args.task == 'translate'),
+            send_last_n_segments=args.send_last_n,
+            no_speech_thresh=args.no_speech_thresh,
+            same_output_threshold=args.same_output_thresh
         )
         
         # Iniciar transcripción desde el micrófono
