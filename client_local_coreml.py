@@ -60,7 +60,7 @@ class LocalCoreMLClient:
         # Cargar modelo Whisper
         print(f"   Cargando modelo '{model_name}'...")
         self.model = whisper.load_model(model_name, device=self.device)
-        print("   ✅ Modelo cargado en memoria")
+        print("   ✅ Modelo cargado en memoria") 
         
         # Configurar traductor DeepL
         self.translator = DeeplTranslator(
@@ -72,7 +72,7 @@ class LocalCoreMLClient:
         
         # Configuración de audio
         self.sample_rate = 16000
-        self.chunk_duration = 2.0  # Segundos de audio por chunk
+        self.chunk_duration = 3.5  # Segundos de audio por chunk
         self.chunk_samples = int(self.sample_rate * self.chunk_duration)
         
         # Buffer de audio
