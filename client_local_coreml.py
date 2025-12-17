@@ -14,7 +14,7 @@ import threading
 import sys
 import os
 import argparse
-from deep_translator import DeeplTranslator
+import deepl
 import time
 import json
 from urllib import request as urllib_request, error as urllib_error
@@ -49,7 +49,7 @@ sys.modules['tqdm.auto'].tqdm = DummyTqdm
 class LocalCoreMLClient:
     """Cliente local optimizado para Apple M4 con CoreML."""
     
-    def __init__(self, api_key, source_lang='en', target_lang='es', model_name='small', web_display=False):
+    def __init__(self, api_key, source_lang='en', target_lang='es', model_name='small', web_display=False, glossary_id=None):
         print("🚀 Inicializando Whisper Local con CoreML...")
         
         # NOTA: openai-whisper tiene problemas con MPS (sparse tensors)
@@ -64,17 +64,17 @@ class LocalCoreMLClient:
         self.model = whisper.load_model(model_name, device=self.device)
         print("   ✅ Modelo cargado en memoria") 
         
-        # Configurar traductor DeepL
-        self.translator = DeeplTranslator(
-            api_key=api_key,
-            source=source_lang,
-            target=target_lang,
-            use_free_api=True
-        )
+        # Configurar traductor DeepL (biblioteca oficial)
+        self.translator = deepl.Translator(api_key)
+        self.source_lang = source_lang
+        self.target_lang = target_lang
+        self.glossary_id = glossary_id
+        if glossary_id:
+            print(f"   📚 Glosario activado: {glossary_id}")
         
         # Configuración de audio
         self.sample_rate = 16000
-        self.chunk_duration = 3.5  # Segundos de audio por chunk
+        self.chunk_duration = 1.5  # Segundos de audio por chunk
         self.chunk_samples = int(self.sample_rate * self.chunk_duration)
         
         # Buffer de audio
@@ -141,7 +141,7 @@ class LocalCoreMLClient:
             return None
     
     def translate_text(self, text):
-        """Traducir texto usando caché."""
+        """Traducir texto usando caché y glosario (si está configurado)."""
         if not text:
             return None
         
@@ -150,7 +150,14 @@ class LocalCoreMLClient:
             return self.translation_cache[text]
         
         try:
-            translated = self.translator.translate(text)
+            # Traducir con la biblioteca oficial de DeepL
+            result = self.translator.translate_text(
+                text,
+                source_lang=self.source_lang,
+                target_lang=self.target_lang,
+                glossary=self.glossary_id  # Usar glosario si está configurado
+            )
+            translated = result.text
             self.translation_cache[text] = translated
             return translated
         except Exception as e:
@@ -292,6 +299,12 @@ def main():
         action='store_true',
         help='Enviar traducciones a servidor web en localhost:5000'
     )
+    parser.add_argument(
+        '--glossary-id',
+        type=str,
+        default=None,
+        help='ID del glosario de DeepL (opcional)'
+    )
     
     args = parser.parse_args()
     
@@ -320,7 +333,8 @@ def main():
             source_lang=args.source_lang,
             target_lang=args.target_lang,
             model_name=args.model,
-            web_display=args.web_display
+            web_display=args.web_display,
+            glossary_id=args.glossary_id
         )
         
         client.start()
