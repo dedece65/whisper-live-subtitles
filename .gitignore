@@ -17,3 +17,6 @@ __pycache__/
 
 # No ignorar la carpeta web
 !web/
+
+# Ignorar archivos de glosario
+*.csv
