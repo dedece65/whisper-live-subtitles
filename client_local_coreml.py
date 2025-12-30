@@ -49,7 +49,7 @@ sys.modules['tqdm.auto'].tqdm = DummyTqdm
 class LocalCoreMLClient:
     """Cliente local optimizado para Apple M4 con CoreML."""
     
-    def __init__(self, api_key, source_lang='en', target_lang='es', model_name='small', web_display=False, glossary_id=None):
+    def __init__(self, api_key, source_lang='en', target_lang='es', model_name='small', web_display=False, glossary_id=None, sentence_mode=False, transcribe_only=False):
         print("🚀 Inicializando Whisper Local con CoreML...")
         
         # NOTA: openai-whisper tiene problemas con MPS (sparse tensors)
@@ -65,12 +65,16 @@ class LocalCoreMLClient:
         print("   ✅ Modelo cargado en memoria") 
         
         # Configurar traductor DeepL (biblioteca oficial)
-        self.translator = deepl.Translator(api_key)
-        self.source_lang = source_lang
-        self.target_lang = target_lang
-        self.glossary_id = glossary_id
-        if glossary_id:
-            print(f"   📚 Glosario activado: {glossary_id}")
+        self.transcribe_only = transcribe_only
+        if not transcribe_only:
+            self.translator = deepl.Translator(api_key)
+            self.source_lang = source_lang
+            self.target_lang = target_lang
+            self.glossary_id = glossary_id
+            if glossary_id:
+                print(f"   📚 Glosario activado: {glossary_id}")
+        else:
+            print("   🎤 Modo solo transcripción (sin traducción)")
         
         # Configuración de audio
         self.sample_rate = 16000
@@ -84,6 +88,13 @@ class LocalCoreMLClient:
         # Caché de traducciones
         self.translation_cache = {}
         self.last_transcription = ""
+        
+        # Modo de traducción por frases completas
+        self.sentence_mode = sentence_mode
+        self.sentence_buffer = ""  # Buffer para acumular texto hasta frase completa
+        self.minimum_words_per_sentence = 5  # Mínimo de palabras para considerar frase completa
+        if sentence_mode:
+            print(f"   📝 Modo de frases completas: Activado (mín. {self.minimum_words_per_sentence} palabras)")
         
         # Configuración web display
         self.web_display = web_display
@@ -206,22 +217,46 @@ class LocalCoreMLClient:
                     text = self.process_audio_chunk(audio_chunk.reshape(-1, 1))
                     
                     if text and text != self.last_transcription:
-                        # Traducir
-                        translated = self.translate_text(text)
-                        
-                        # Calcular latencia
-                        latency = time.time() - start_time
-                        
-                        if translated:
-                            # Enviar a web display si está habilitado
-                            self.send_to_web(translated)
-                            
-                            # Limpiar línea y mostrar solo traducción
+                        if self.transcribe_only:
+                            # Modo solo transcripción: mostrar texto sin traducir
                             sys.stdout.write('\r' + ' ' * 150 + '\r')
-                            print(f"{translated}")
+                            print(f"🎤 {text}")
                             sys.stdout.flush()
-                            
                             self.last_transcription = text
+                        elif self.sentence_mode:
+                            # Modo frases completas: acumular hasta detectar fin de frase
+                            self.sentence_buffer += " " + text if self.sentence_buffer else text
+                            
+                            # Detectar fin de frase: puntuación + mínimo de palabras
+                            word_count = len(self.sentence_buffer.split())
+                            has_punctuation = text.rstrip().endswith(('.', '!', '?'))
+                            has_enough_words = word_count >= self.minimum_words_per_sentence
+                            
+                            if has_punctuation and has_enough_words:
+                                # Traducir frase completa
+                                translated = self.translate_text(self.sentence_buffer)
+                                latency = time.time() - start_time
+                                
+                                if translated:
+                                    self.send_to_web(translated)
+                                    sys.stdout.write('\r' + ' ' * 150 + '\r')
+                                    print(f"📝 {translated}")
+                                    sys.stdout.flush()
+                                
+                                # Limpiar buffer
+                                self.sentence_buffer = ""
+                        else:
+                            # Modo normal: traducir cada chunk
+                            translated = self.translate_text(text)
+                            latency = time.time() - start_time
+                            
+                            if translated:
+                                self.send_to_web(translated)
+                                sys.stdout.write('\r' + ' ' * 150 + '\r')
+                                print(f"{translated}")
+                                sys.stdout.flush()
+                        
+                        self.last_transcription = text
                 
             except queue.Empty:
                 continue
@@ -305,24 +340,44 @@ def main():
         default=None,
         help='ID del glosario de DeepL (opcional)'
     )
+    parser.add_argument(
+        '--sentence-mode',
+        action='store_true',
+        help='Traducir frases completas en vez de chunks de tiempo (mejor contexto, mayor latencia)'
+    )
+    parser.add_argument(
+        '--transcribe-only',
+        action='store_true',
+        help='Solo transcribir sin traducir (útil para testing)'
+    )
     
     args = parser.parse_args()
     
-    # Obtener API key
+    # Obtener API key (solo si no es transcribe-only)
     api_key = args.api_key or os.getenv('DEEPL_API_KEY')
-    if not api_key:
-        print("❌ ERROR: DEEPL_API_KEY requerida")
+    if not args.transcribe_only and not api_key:
+        print("❌ ERROR: DEEPL_API_KEY requerida para traducción")
         print("export DEEPL_API_KEY='your-key'")
+        print("O usa --transcribe-only para solo transcribir")
         sys.exit(1)
     
     print("="*60)
     print("⚡ WHISPER LOCAL con CPU Optimizado - Apple M4")
     print("="*60)
-    print(f"🌍 {args.source_lang.upper()} → {args.target_lang.upper()}")
+    if args.transcribe_only:
+        print(f"🎤 Modo: Solo transcripción (sin traducción)")
+    else:
+        print(f"🌍 {args.source_lang.upper()} → {args.target_lang.upper()}")
     print(f"🤖 Modelo: {args.model}")
-    print(f"💾 Caché: Activado")
-    print(f"⏱️  Latencia esperada: 1-2 segundos")
+    if not args.transcribe_only:
+        print(f"💾 Caché: Activado")
+        print(f"⏱️  Latencia esperada: 1-2 segundos")
     print(f"ℹ️  CPU M4 >> Docker CPU genérico")
+    if not args.transcribe_only:
+        if args.sentence_mode:
+            print(f"📝 Modo: Frases completas (mejor contexto)")
+        else:
+            print(f"⚡ Modo: Chunks de tiempo (menor latencia)")
     if args.web_display:
         print(f"🌐 Web Display: http://localhost:5000")
     print("="*60 + "\n")
@@ -334,7 +389,9 @@ def main():
             target_lang=args.target_lang,
             model_name=args.model,
             web_display=args.web_display,
-            glossary_id=args.glossary_id
+            glossary_id=args.glossary_id,
+            sentence_mode=args.sentence_mode,
+            transcribe_only=args.transcribe_only
         )
         
         client.start()
