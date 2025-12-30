@@ -4,7 +4,7 @@ import csv
 
 # Pon tu API Key aquí o asegúrate de tenerla en el entorno
 API_KEY = os.getenv('DEEPL_API_KEY') 
-CSV_FILE = 'glosario_bob.csv' # Asegúrate de que este archivo está en la misma carpeta
+CSV_FILE = 'glosario_bob_optimizado.csv' # Asegúrate de que este archivo está en la misma carpeta
 
 def create_glossary():
     if not API_KEY:

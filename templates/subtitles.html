@@ -190,11 +190,12 @@
         
         <div id="current-subtitle">
             <div class="placeholder">
-                Esperando subtítulos...
+                Esperando subtítulos (Full Screen Mode)...
             </div>
         </div>
         
         <div class="subtitle-meta" id="subtitle-meta"></div>
+        <div style="position:fixed; bottom:5px; right:5px; font-size:10px; color: #fff; opacity:0.3">v2.0</div>
     </div>
 
     <script>
@@ -203,7 +204,7 @@
         
         let subtitleCount = 0;
         let subtitles = [];
-        const MAX_HISTORY = 2; // Mostrar 2 subtítulos antiguos
+        const MAX_HISTORY = 50; // Mostrar hasta 50 subtítulos antiguos para llenar la pantalla
 
         // Conexión establecida
         socket.on('connect', () => {

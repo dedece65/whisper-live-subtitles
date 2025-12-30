@@ -45,9 +45,9 @@ def receive_subtitle():
         'id': subtitle_counter
     }
     
-    # Agregar al historial (máximo 3)
+    # Agregar al historial (máximo 100)
     subtitle_history.append(subtitle_data)
-    if len(subtitle_history) > 3:
+    if len(subtitle_history) > 100:
         subtitle_history.pop(0)
     
     # Transmitir a todos los clientes conectados
@@ -82,7 +82,7 @@ def main():
     print("=" * 60)
     print(f"🌐 URL: http://localhost:5000")
     print(f"📡 WebSocket: Activado")
-    print(f"📝 Historial: Últimos 3 subtítulos")
+    print(f"📝 Historial: Últimos 100 subtítulos")
     print("=" * 60)
     print("\n✨ Servidor iniciado. Abre http://localhost:5000 en tu navegador.")
     print("   Para pantalla completa, presiona F11\n")
