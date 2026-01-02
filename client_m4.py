@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Cliente Whisper PRO - Con Contexto de Ingeniería y Buffer Inteligente.
-Soluciona: Fragmentación de frases, alucinaciones ($) y errores de vocabulario.
-"""
 
 import numpy as np
 import sounddevice as sd
@@ -40,9 +36,13 @@ class M4ProClient:
         self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
         
         # --- CONFIGURACIÓN PRO ---
-        # Palabras clave para guiar a Whisper y evitar "$360,000"
-        self.initial_prompt = "Audio engineering technical class. Vocabulary: Phase shift, 360 degrees, wavelength, comb filtering, linear frequency, logarithmic display, polarity, milliseconds, spiral function, magnitude."
-        
+        # Palabras clave para guiar a Whisper
+        self.initial_prompt = (
+            "This is a professional technical lecture about audio engineering and sound physics. "
+            "Terminology: Phase shift, 360°, wavelength, comb filtering, polarity, millisecond, "
+            "Fast Fourier Transform, SPL, decibels, Ohm's law, impedance."
+        )
+
         self.web_server_url = "http://localhost:5000/subtitle"
         self.web_display = web_display
         self.source_lang = source_lang
@@ -59,6 +59,14 @@ class M4ProClient:
         self.min_sentence_length = 20    # No traducir si hay menos de X caracteres (evita "And then.")
         self.amplitude_threshold = 0.015 
 
+        # --- NIVEL DE CONFIANZA --- 
+        self.min_confidence = 0.7
+
+        # --- MEMORIA DE CONTEXTO ---
+        self.context_history = []
+        self.max_context_sentences = 3
+        
+
     def audio_callback(self, indata, frames, time_info, status):
         self.audio_queue.put(indata.copy())
 
@@ -69,6 +77,17 @@ class M4ProClient:
             req = urllib_request.Request(self.web_server_url, data=data, headers={'Content-Type': 'application/json'})
             urllib_request.urlopen(req, timeout=0.5)
         except: pass
+
+    def clean_text(self, text):
+        """Limpia errores comunes de formato de Whisper."""
+        import re
+        # Elimina espacios antes de comas, puntos o signos de interrogación
+        text = re.sub(r'\s+([,.?!])', r'\1', text)
+        # Corrige dobles espacios
+        text = re.sub(r'\s+', ' ', text)
+        # Asegura que la primera letra sea mayúscula
+        text = text.strip().capitalize()
+        return text
 
     def processing_loop(self):
         while self.is_running:
@@ -95,66 +114,101 @@ class M4ProClient:
                 if buffer_duration < 1.5:
                     continue
 
-                # 2. Transcribir con CONTEXTO
-                # initial_prompt es la clave para arreglar "Wavelin" y "$360,000"
-                segments, _ = self.model.transcribe(
+                # 2. Transcribir con mayor granularidad
+                segments, info = self.model.transcribe(
                     self.audio_buffer, 
                     language=self.source_lang,
                     vad_filter=True,
-                    vad_parameters=dict(min_silence_duration_ms=700), # Menos sensible a pausas cortas
+                    vad_parameters=dict(min_silence_duration_ms=600),
                     initial_prompt=self.initial_prompt,
-                    condition_on_previous_text=False
+                    word_timestamps=True,
+                    beam_size=5
                 )
                 
-                current_text = " ".join([s.text for s in segments]).strip()
-                
-                if not current_text: continue
+                # Extraemos palabras y su probabilidad media
+                words_info = []
+                for segment in segments:
+                    for word in segment.words:
+                        words_info.append(word)
 
-                # Filtro de alucinaciones
-                if current_text.lower() in ["thank you.", "subtitles by", "copyright", "okay."]:
-                    self.audio_buffer = np.array([], dtype=np.float32)
+                current_text = " ".join([w.word for w in words_info]).strip()
+                
+                # Calculamos la confianza media de la frase actual
+                if words_info:
+                    avg_confidence = sum([w.probability for w in words_info]) / len(words_info)
+                else:
+                    avg_confidence = 0
+
+                if not current_text or avg_confidence < self.min_confidence:
+                    # Si la confianza es muy baja, no procesamos todavía, esperamos más audio
                     continue
 
-                sys.stdout.write(f"\r👂 ({buffer_duration:.1f}s): {current_text[-70:]}")
+                sys.stdout.write(f"\r👂 [Conf: {avg_confidence:.2f}] ({buffer_duration:.1f}s): {current_text}")
                 sys.stdout.flush()
 
-                # 3. LÓGICA DE "FRASE COMPLETA" MEJORADA
-                # Criterios para traducir:
-                # A. Termina en puntuación Y es suficientemente larga (evita traducir "And.")
-                # B. El buffer es demasiado grande (> 10s), hay que soltarlo ya.
+                # 3. LÓGICA DE "SMART SEGMENTATION"
+                # Analizar el último segmento para ver si hay un cierre natural
+                # Buscamos si el último "chunk" termina en silencio significativo
+                # 'info.duration' es el tiempo total procesado en este ciclo
+                # 'segments' contiene los tiempos de inicio/fin
                 
-                ends_punctuation = current_text.endswith(('.', '?', '!'))
-                is_long_enough = len(current_text) > self.min_sentence_length
-                force_timeout = buffer_duration > self.max_buffer_duration
+                last_word_end = words_info[-1].end if words_info else 0
+                trailing_silence = buffer_duration - last_word_end
+
+                # 1. ¿Hay un punto/pregunta al final?
+                has_terminal_punc = current_text.endswith(('.', '?', '!', ':'))
                 
-                should_translate = (ends_punctuation and is_long_enough) or force_timeout
+                # 2. ¿Hay un silencio tras la última palabra > 0.8s (un respiro claro)?
+                is_natural_pause = trailing_silence > 0.5
+                
+                # 3. ¿La frase es lo suficientemente larga para tener sentido (mín. 4 palabras)?
+                is_meaningful = len(words_info) > 4
+
+                # El disparador: Si hay puntuación Y pausa, O si la pausa es muy larga, O timeout de seguridad
+                should_translate = (has_terminal_punc and is_natural_pause) or \
+                                 (is_natural_pause and is_meaningful) or \
+                                 (buffer_duration > self.max_buffer_duration)
 
                 if should_translate:
-                    print(f"\n⚡ TRADUCIENDO: {current_text}")
+                    current_text = self.clean_text(current_text)
+                    
+                    # 1. PREPARAR CONTEXTO (Fase 2.1)
+                    # Unimos las frases anteriores para que DeepL entienda el hilo conductor
+                    translation_context = " ".join(self.context_history)
                     
                     final_es = current_text
                     if self.translator:
                         try:
-                            # Contexto para DeepL: Unir frases previas si es necesario
+                            # 2. TRADUCCIÓN CON MEMORIA
+                            # El parámetro 'context' ayuda a mantener género, número y terminología
                             res = self.translator.translate_text(
                                 current_text, 
                                 source_lang=self.source_lang, 
                                 target_lang=self.target_lang, 
-                                glossary=self.glossary_id
+                                glossary=self.glossary_id,
+                                context=translation_context # <--- La clave de la Fase 2
                             )
                             final_es = res.text
+                            
+                            # 3. ACTUALIZAR HISTORIAL
+                            # Guardamos la frase original (inglés) para la siguiente traducción
+                            self.context_history.append(current_text)
+                            if len(self.context_history) > self.max_context_sentences:
+                                self.context_history.pop(0) # Mantener solo las últimas N
+                                
                         except Exception as e:
-                            print(f"Error DeepL: {e}")
+                            print(f"❌ Error DeepL: {e}")
                     
-                    print(f"🇪🇸 {final_es}\n" + "-"*40)
+                    print(f"\n🇬🇧 Contexto previo: {translation_context[-50:] if translation_context else 'None'}")
+                    print(f"🇪🇸 {final_es}")
+                    print("-" * 50)
+                    
                     self.send_to_web(final_es)
-                    
-                    # Limpieza
                     self.audio_buffer = np.array([], dtype=np.float32)
 
             except Exception as e:
-                print(f"\n❌ Error: {e}")
-                self.audio_buffer = np.array([], dtype=np.float32)
+                print(f"⚠️ Error en bucle principal: {e}")
+                time.sleep(0.1)
 
     def start(self):
         self.is_running = True
