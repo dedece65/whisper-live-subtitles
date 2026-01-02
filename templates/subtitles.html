@@ -16,9 +16,10 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: #1a1a1a;
             color: #e0e0e0;
-            min-height: 100vh;
+            height: 100vh;
             display: flex;
             flex-direction: column;
+            justify-content: flex-end;
             overflow: hidden;
         }
 
@@ -56,8 +57,7 @@
         .subtitle-container {
             flex: 1;
             display: flex;
-            flex-direction: column;
-            justify-content: flex-end;
+            flex-direction: column-reverse;
             padding: 2rem;
             padding-bottom: 4rem;
         }
@@ -184,18 +184,19 @@
     </div>
 
     <div class="subtitle-container">
-        <div class="subtitle-history" id="subtitle-history">
-            <!-- Subtítulos antiguos se mostrarán aquí -->
-        </div>
+        <div class="subtitle-meta" id="subtitle-meta"></div>
         
         <div id="current-subtitle">
             <div class="placeholder">
                 Esperando subtítulos (Full Screen Mode)...
             </div>
         </div>
+
+        <div class="subtitle-history" id="subtitle-history">
+            <!-- Subtítulos antiguos se mostrarán aquí -->
+        </div>
         
-        <div class="subtitle-meta" id="subtitle-meta"></div>
-        <div style="position:fixed; bottom:5px; right:5px; font-size:10px; color: #fff; opacity:0.3">v2.0</div>
+        <div style="position:fixed; bottom:5px; right:5px; font-size:10px; color: #fff; opacity:0.3">v2.1</div>
     </div>
 
     <script>
