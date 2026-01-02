@@ -38,9 +38,11 @@ class M4ProClient:
         # --- CONFIGURACIÓN PRO ---
         # Palabras clave para guiar a Whisper
         self.initial_prompt = (
-            "This is a professional technical lecture about audio engineering and sound physics. "
-            "Terminology: Phase shift, 360°, wavelength, comb filtering, polarity, millisecond, "
-            "Fast Fourier Transform, SPL, decibels, Ohm's law, impedance."
+            "This is a technical seminar by Bob McCarthy about System Design and Optimization, "
+            "hosted by Meyer Sound and RMS Proaudio at Cartuja Center CITE in Seville. "
+            "Topics include MAPP 3D prediction, Galileo GALAXY processing, SIM measurements, and FFT analysis. "
+            "References to Metallica WorldWired tour, Roskilde Festival, and Focal Press books. "
+            "Key concepts: LMBC, splay angles, phase vs frequency, coherence, and sound pressure level (SPL)."
         )
 
         self.web_server_url = "http://localhost:5000/subtitle"
