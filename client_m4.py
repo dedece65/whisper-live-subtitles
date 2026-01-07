@@ -12,14 +12,16 @@ import time
 import json
 import warnings
 import re
+import logging
 from faster_whisper import WhisperModel
 from urllib import request as urllib_request
 
 # 1. LIMPIEZA DE CONSOLA
 warnings.filterwarnings("ignore", category=RuntimeWarning)
+logging.getLogger("urllib3").setLevel(logging.ERROR)
 
 class M4ProClient:
-    def __init__(self, api_key, source_lang='en', target_lang='es', model_size='small', web_display=False, glossary_id=None):
+    def __init__(self, api_key, source_lang='en', target_lang='es', model_size='small', web_display=False, glossary_id=None, max_time=6.0):
         print("🚀 Inicializando Whisper PRO (Ingeniería de Sonido)...")
         
         # --- DEEPL ---
@@ -34,7 +36,7 @@ class M4ProClient:
                 print(f"   ❌ Error DeepL: {e}")
 
         # --- WHISPER INT8, CAMBIAR A FLOAT16 SI VAMOS A USAR GPU ---
-        self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        self.model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=8)
         
         # --- CONFIGURACIÓN PRO ---
         # Palabras clave para guiar a Whisper
@@ -58,17 +60,17 @@ class M4ProClient:
         self.audio_buffer = np.array([], dtype=np.float32)
         
         # --- CONTROL DE FLUJO ---
-        self.max_buffer_duration = 6.0  
+        self.max_buffer_duration = max_time
         self.min_words_trigger = 4
         self.amplitude_threshold = 0.015 
-        self.overlap_duration = 0.5
+        self.overlap_duration = 0.25
 
         # --- FILTROS ESTADÍSTICOS DE SILENCIO ---
         self.no_speech_threshold = 0.6
         self.max_compression_ratio = 2.4
 
         # --- NIVEL DE CONFIANZA --- 
-        self.min_confidence = 0.65
+        self.min_confidence = 0.70
 
         # --- MEMORIA DE CONTEXTO ---
         self.context_history = []
@@ -78,6 +80,13 @@ class M4ProClient:
     def audio_callback(self, indata, frames, time_info, status):
         if status:
             print(f"⚠️ Audio callback error: {status}")
+
+        if self.audio_queue.qsize() > 50: 
+            while not self.audio_queue.empty():
+                try: self.audio_queue.get_nowait()
+                except queue.Empty: break
+            print("Lag detectado: Saltando audio para sincronizar...")
+
         self.audio_queue.put(indata.copy())
 
     def send_to_web(self, text):
@@ -125,11 +134,13 @@ class M4ProClient:
                     self.audio_buffer, 
                     language=self.source_lang,
                     vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500),
                     initial_prompt=self.initial_prompt,
                     word_timestamps=True,
-                    beam_size=3,
+                    beam_size=1,
                     no_speech_threshold=self.no_speech_threshold,
-                    compression_ratio_threshold=self.max_compression_ratio
+                    compression_ratio_threshold=self.max_compression_ratio,
+                    condition_on_previous_text=True
                 )
 
                 valid_segments = []
@@ -176,10 +187,15 @@ class M4ProClient:
                 )
 
                 if should_translate:
+                    start_time = time.time()
+
                     if avg_confidence > self.min_confidence:
                         clean_en = self.clean_text(current_text)
 
+                        t0 = time.time()
+
                         final_es = self.translate_with_deepl(clean_en)
+                        print(f"\n DeepL tardó: {time.time() - t0:.2f}s")
                         #print(f"\n🇬🇧 Contexto previo: {translation_context[-50:] if translation_context else 'None'}")
                         print(f"\n🇬🇧 {clean_en}")
                         print(f"🇪🇸 {final_es}")
@@ -189,6 +205,7 @@ class M4ProClient:
                     
                     overlap_samples = int(self.overlap_duration * self.sample_rate)
                     self.audio_buffer = self.audio_buffer[-overlap_samples:]
+                    print(f"Procesamiento tardó: {time.time() - start_time:.2f}s")
 
             except Exception as e:
                 print(f"⚠️ Error en bucle principal: {e}")
@@ -215,8 +232,12 @@ class M4ProClient:
         self.is_running = True
         threading.Thread(target=self.processing_loop, daemon=True).start()
         print("\n🎤 Escuchando... (Contexto de Ingeniería Activado)")
-        with sd.InputStream(callback=self.audio_callback, channels=1, samplerate=self.sample_rate):
-            while self.is_running: sd.sleep(100)
+        try:
+            with sd.InputStream(callback=self.audio_callback, channels=1, samplerate=self.sample_rate, blocksize=int(self.sample_rate * 0.1)):
+                while self.is_running: sd.sleep(100)
+        except Exception as e:
+            print(f"\n\n Error en InputStream: {e}")
+            self.stop()
     
     def stop(self):
         self.is_running = False
@@ -226,9 +247,10 @@ if __name__ == "__main__":
     parser.add_argument('--glossary-id', type=str)
     parser.add_argument('--web-display', action='store_true')
     parser.add_argument('--model', type=str, default='distil-medium.en')
+    parser.add_argument('--max-time', type=float, default=6.0)
     args = parser.parse_args()
     
     api_key = os.getenv('DEEPL_API_KEY')
-    client = M4ProClient(api_key, model_size=args.model, web_display=args.web_display, glossary_id=args.glossary_id)
+    client = M4ProClient(api_key, model_size=args.model, web_display=args.web_display, glossary_id=args.glossary_id, max_time=args.max_time)
     try: client.start()
     except KeyboardInterrupt: client.stop()
