@@ -23,3 +23,7 @@ __pycache__/
 
 # Ignorar archivos .DS_Store
 *.DS_Store
+
+# Ignorar archivos de subtitulos
+subtitles.json
+subtitles_es.txt
