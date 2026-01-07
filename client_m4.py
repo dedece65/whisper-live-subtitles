@@ -11,10 +11,11 @@ import deepl
 import time
 import json
 import warnings
+import re
 from faster_whisper import WhisperModel
 from urllib import request as urllib_request
 
-# 1. LIMPIEZA DE CONSOLA (Ocultar warnings matemáticos irrelevantes)
+# 1. LIMPIEZA DE CONSOLA
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 class M4ProClient:
@@ -32,7 +33,7 @@ class M4ProClient:
             except Exception as e:
                 print(f"   ❌ Error DeepL: {e}")
 
-        # --- WHISPER INT8 ---
+        # --- WHISPER INT8, CAMBIAR A FLOAT16 SI VAMOS A USAR GPU ---
         self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
         
         # --- CONFIGURACIÓN PRO ---
@@ -57,12 +58,17 @@ class M4ProClient:
         self.audio_buffer = np.array([], dtype=np.float32)
         
         # --- CONTROL DE FLUJO ---
-        self.max_buffer_duration = 10.0  # Aguantar más tiempo para formar frases
-        self.min_sentence_length = 20    # No traducir si hay menos de X caracteres (evita "And then.")
+        self.max_buffer_duration = 6.0  
+        self.min_words_trigger = 4
         self.amplitude_threshold = 0.015 
+        self.overlap_duration = 0.5
+
+        # --- FILTROS ESTADÍSTICOS DE SILENCIO ---
+        self.no_speech_threshold = 0.6
+        self.max_compression_ratio = 2.4
 
         # --- NIVEL DE CONFIANZA --- 
-        self.min_confidence = 0.7
+        self.min_confidence = 0.65
 
         # --- MEMORIA DE CONTEXTO ---
         self.context_history = []
@@ -70,6 +76,8 @@ class M4ProClient:
         
 
     def audio_callback(self, indata, frames, time_info, status):
+        if status:
+            print(f"⚠️ Audio callback error: {status}")
         self.audio_queue.put(indata.copy())
 
     def send_to_web(self, text):
@@ -77,30 +85,26 @@ class M4ProClient:
         try:
             data = json.dumps({'text': text}).encode('utf-8')
             req = urllib_request.Request(self.web_server_url, data=data, headers={'Content-Type': 'application/json'})
-            urllib_request.urlopen(req, timeout=0.5)
-        except: pass
+            urllib_request.urlopen(req, timeout=0.3)
+        except Exception:
+            pass
 
     def clean_text(self, text):
         """Limpia errores comunes de formato de Whisper."""
-        import re
-        # Elimina espacios antes de comas, puntos o signos de interrogación
         text = re.sub(r'\s+([,.?!])', r'\1', text)
-        # Corrige dobles espacios
         text = re.sub(r'\s+', ' ', text)
-        # Asegura que la primera letra sea mayúscula
-        text = text.strip().capitalize()
-        return text
+        return text.strip().capitalize()
 
     def processing_loop(self):
         while self.is_running:
             try:
-                # 1. Recoger Audio
+                # 1. Recoger audio de la cola
                 new_chunks = []
                 while not self.audio_queue.empty():
                     new_chunks.append(self.audio_queue.get())
                 
                 if not new_chunks:
-                    time.sleep(0.05)
+                    time.sleep(0.1)
                     continue
 
                 chunk_concat = np.concatenate(new_chunks).flatten().astype(np.float32)
@@ -113,7 +117,7 @@ class M4ProClient:
                 
                 # Procesar solo si tenemos audio sustancial (>1.5s)
                 buffer_duration = len(self.audio_buffer) / self.sample_rate
-                if buffer_duration < 1.5:
+                if buffer_duration < 1.2:
                     continue
 
                 # 2. Transcribir con mayor granularidad
@@ -121,18 +125,28 @@ class M4ProClient:
                     self.audio_buffer, 
                     language=self.source_lang,
                     vad_filter=True,
-                    vad_parameters=dict(min_silence_duration_ms=600),
                     initial_prompt=self.initial_prompt,
                     word_timestamps=True,
-                    beam_size=5
+                    beam_size=3,
+                    no_speech_threshold=self.no_speech_threshold,
+                    compression_ratio_threshold=self.max_compression_ratio
                 )
+
+                valid_segments = []
+                for s in segments:
+                    if s.no_speech_prob < self.no_speech_threshold and s.compression_ratio < self.max_compression_ratio:
+                        valid_segments.append(s)
+                
+                if not valid_segments:
+                    if buffer_duration > 12: self.audio_buffer = np.array([], dtype=np.float32)
+                    continue
                 
                 # Extraemos palabras y su probabilidad media
-                words_info = []
-                for segment in segments:
-                    for word in segment.words:
-                        words_info.append(word)
-
+                words_info = [word for segment in valid_segments for word in segment.words]
+                if not words_info:
+                    if buffer_duration > 15: self.audio_buffer = np.array([], dtype=np.float32)
+                    continue
+                
                 current_text = " ".join([w.word for w in words_info]).strip()
                 
                 # Calculamos la confianza media de la frase actual
@@ -145,76 +159,61 @@ class M4ProClient:
                     # Si la confianza es muy baja, no procesamos todavía, esperamos más audio
                     continue
 
-                sys.stdout.write(f"\r👂 [Conf: {avg_confidence:.2f}] ({buffer_duration:.1f}s): {current_text}")
+                sys.stdout.write(f"\r👂 [Conf: {avg_confidence:.2f}] ({buffer_duration:.1f}s): {current_text[-60:]:>60}")
                 sys.stdout.flush()
 
-                # 3. LÓGICA DE "SMART SEGMENTATION"
-                # Analizar el último segmento para ver si hay un cierre natural
-                # Buscamos si el último "chunk" termina en silencio significativo
-                # 'info.duration' es el tiempo total procesado en este ciclo
-                # 'segments' contiene los tiempos de inicio/fin
-                
+                # 3. LÓGICA DE SEGMENTACIÓN INTELIGENTE
                 last_word_end = words_info[-1].end if words_info else 0
                 trailing_silence = buffer_duration - last_word_end
-
-                # 1. ¿Hay un punto/pregunta al final?
                 has_terminal_punc = current_text.endswith(('.', '?', '!', ':'))
-                
-                # 2. ¿Hay un silencio tras la última palabra > 0.8s (un respiro claro)?
                 is_natural_pause = trailing_silence > 0.5
-                
-                # 3. ¿La frase es lo suficientemente larga para tener sentido (mín. 4 palabras)?
-                is_meaningful = len(words_info) > 4
+                is_meaningful = len(words_info) >= self.min_words_trigger
 
-                # El disparador: Si hay puntuación Y pausa, O si la pausa es muy larga, O timeout de seguridad
-                should_translate = (has_terminal_punc and is_natural_pause) or \
-                                 (is_natural_pause and is_meaningful) or \
-                                 (buffer_duration > self.max_buffer_duration)
+                should_translate = (
+                    (has_terminal_punc and is_natural_pause) or \
+                    (is_natural_pause and is_meaningful) or \
+                    (buffer_duration > self.max_buffer_duration)
+                )
 
                 if should_translate:
-                    current_text = self.clean_text(current_text)
+                    if avg_confidence > self.min_confidence:
+                        clean_en = self.clean_text(current_text)
+
+                        final_es = self.translate_with_deepl(clean_en)
+                        #print(f"\n🇬🇧 Contexto previo: {translation_context[-50:] if translation_context else 'None'}")
+                        print(f"\n🇬🇧 {clean_en}")
+                        print(f"🇪🇸 {final_es}")
+                        print("-" * 100)
+
+                        self.send_to_web(final_es)
                     
-                    # 1. PREPARAR CONTEXTO (Fase 2.1)
-                    # Unimos las frases anteriores para que DeepL entienda el hilo conductor
-                    translation_context = " ".join(self.context_history)
-                    
-                    final_es = current_text
-                    if self.translator:
-                        try:
-                            # 2. TRADUCCIÓN CON MEMORIA
-                            # El parámetro 'context' ayuda a mantener género, número y terminología
-                            res = self.translator.translate_text(
-                                current_text, 
-                                source_lang=self.source_lang, 
-                                target_lang=self.target_lang, 
-                                glossary=self.glossary_id,
-                                context=translation_context # <--- La clave de la Fase 2
-                            )
-                            final_es = res.text
-                            
-                            # 3. ACTUALIZAR HISTORIAL
-                            # Guardamos la frase original (inglés) para la siguiente traducción
-                            self.context_history.append(current_text)
-                            if len(self.context_history) > self.max_context_sentences:
-                                self.context_history.pop(0) # Mantener solo las últimas N
-                                
-                        except Exception as e:
-                            print(f"❌ Error DeepL: {e}")
-                    
-                    print(f"\n🇬🇧 Contexto previo: {translation_context[-50:] if translation_context else 'None'}")
-                    print(f"🇪🇸 {final_es}")
-                    print("-" * 50)
-                    
-                    self.send_to_web(final_es)
-                    self.audio_buffer = np.array([], dtype=np.float32)
+                    overlap_samples = int(self.overlap_duration * self.sample_rate)
+                    self.audio_buffer = self.audio_buffer[-overlap_samples:]
 
             except Exception as e:
                 print(f"⚠️ Error en bucle principal: {e}")
                 time.sleep(0.1)
 
+    def translate_with_deepl(self, text):
+        if not self.translator: return text
+        try:
+            context = " ".join(self.context_history)
+            res = self.translator.translate_text(
+                text,
+                source_lang=self.source_lang.upper(),
+                target_lang=self.target_lang.upper(),
+                glossary=self.glossary_id,
+                context=context
+            )
+            self.context_history.append(text)
+            if len(self.context_history) > self.max_context_sentences: self.context_history.pop(0)
+            return res.text
+        except:
+            return text
+
     def start(self):
         self.is_running = True
-        threading.Thread(target=self.processing_loop).start()
+        threading.Thread(target=self.processing_loop, daemon=True).start()
         print("\n🎤 Escuchando... (Contexto de Ingeniería Activado)")
         with sd.InputStream(callback=self.audio_callback, channels=1, samplerate=self.sample_rate):
             while self.is_running: sd.sleep(100)
@@ -226,7 +225,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--glossary-id', type=str)
     parser.add_argument('--web-display', action='store_true')
-    parser.add_argument('--model', type=str, default='small')
+    parser.add_argument('--model', type=str, default='distil-medium.en')
     args = parser.parse_args()
     
     api_key = os.getenv('DEEPL_API_KEY')
