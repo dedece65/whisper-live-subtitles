@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
 class M4ProClient:
-    def __init__(self, api_key, source_lang='en', target_lang='es', model_size='small', web_display=False, glossary_id=None, max_time=6.0):
+    def __init__(self, api_key, source_lang='en', target_lang='es', model_size='distil-medium.en', web_display=False, glossary_id=None, max_time=6.0):
         print("🚀 Inicializando Whisper PRO (Ingeniería de Sonido)...")
         
         # --- DEEPL ---
@@ -102,6 +102,8 @@ class M4ProClient:
         """Limpia errores comunes de formato de Whisper."""
         text = re.sub(r'\s+([,.?!])', r'\1', text)
         text = re.sub(r'\s+', ' ', text)
+        # Eliminar repeticiones de palabras
+        text = re.sub(r'\b(\w+)( \1){2,}\b', r'\1', text, flags=re.IGNORECASE)
         return text.strip().capitalize()
 
     def processing_loop(self):
